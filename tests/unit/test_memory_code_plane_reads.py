@@ -175,6 +175,8 @@ def _link(mid: str, *, qn: str = "src.a::Reader::read", state: str = "fresh", **
         "state": state,
         "changed_since": kw.get("since", ""),
         "fingerprint_version": kw.get("version", fingerprint_version()),
+        "checked_commit": kw.get("checked", "a" * 40),
+        "inserted_ms": kw.get("stamped", 0),
     }
 
 
@@ -329,7 +331,7 @@ async def test_positive_code_guidance_waits_for_the_indexed_head(monkeypatch, st
     fetched = "b" * 40
     unparsed = ""
     seen = '{"read": 5000}'
-    stamped: set[str] = set()
+    stamped = 0
     complete_during_read = False
 
     async def readable(org, namespaces):
@@ -340,7 +342,7 @@ async def test_positive_code_guidance_waits_for_the_indexed_head(monkeypatch, st
         nonlocal checked
         if complete_during_read:
             checked = indexed
-        return [_link("m1", state=state)]
+        return [_link("m1", state=state, checked="c" * 40, stamped=stamped)]
 
     async def all_state_many(pairs):
         assert pairs == [("o", "code-a")]
@@ -357,9 +359,65 @@ async def test_positive_code_guidance_waits_for_the_indexed_head(monkeypatch, st
     async def link_cursor(name):
         return seen if name.startswith("seen/") else unparsed
 
-    async def unchecked_memories(org, cns, ids, head, since):
-        assert (cns, head, since) == ("code-a", checked, 3000)  # the read less the margin
-        return stamped & set(ids)
+    monkeypatch.setattr(code_link_reads, "code_namespace_for", lambda *_: "code-a")
+    monkeypatch.setattr(code_link_reads, "readable_namespaces", readable)
+    monkeypatch.setattr(code_link_reads.store, "for_memories", links)
+    monkeypatch.setattr(
+        code_link_reads.code, "repo_for_namespace", lambda *_: SimpleNamespace(git_branch="main")
+    )
+    monkeypatch.setattr(
+        code_link_reads.code, "CodeRepo", lambda: SimpleNamespace(all_state_many=all_state_many)
+    )
+    monkeypatch.setattr(code_link_reads.code, "checked_head", checked_head)
+    monkeypatch.setattr(code_link_reads.code, "link_cursor", link_cursor)
+    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
+    indexed = fetched
+    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
+    complete_during_read = True
+    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
+    unparsed = '["src/a.py"]'
+    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
+    unparsed = '["src/other.py"]'
+    # a link stamped after the last finished catch-up began reading may be one no pass saw,
+    # and with no finished catch-up none is known to be seen
+    # (the cut is the read less the margin: 5000 - 2000)
+    stamped = 3000
+    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
+    stamped = 2999
+    seen = ""
+    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
+    seen = '{"read": 5000}'
+    # a link the writer parked behind a running pass is unknown even at the checked head
+    expected = "unknown" if state == "pending" else state
+    assert await code_link_reads.guidance_code_states("o", [row]) == [expected]
+
+
+async def test_guidance_judges_a_late_link_by_the_row_it_classified(monkeypatch) -> None:
+    """The catch-up rewrites a late link at the head while guidance reads it: the stamp
+    that decides coverage is on the row guidance classified, so it stays unknown."""
+    from server.memory.app import code_link_reads
+
+    head = "a" * 40
+    reads = 0
+
+    async def readable(org, namespaces):
+        return namespaces
+
+    async def links(org, ids):
+        nonlocal reads
+        reads += 1
+        # the first read sees the late link (built at another commit, stamped after the
+        # cut); a second read would see the catch-up's rewrite at the head
+        return [_link("m1", checked="c" * 40 if reads == 1 else head, stamped=4000)]
+
+    async def link_cursor(name):
+        return '{"read": 5000}' if name.startswith("seen/") else ""
+
+    async def checked_head(org, ns):
+        return head
+
+    async def all_state_many(pairs):
+        return {("o", "code-a"): {"clone_head": {"value": head}, "git_head": {"value": head}}}
 
     monkeypatch.setattr(code_link_reads, "code_namespace_for", lambda *_: "code-a")
     monkeypatch.setattr(code_link_reads, "readable_namespaces", readable)
@@ -372,26 +430,10 @@ async def test_positive_code_guidance_waits_for_the_indexed_head(monkeypatch, st
     )
     monkeypatch.setattr(code_link_reads.code, "checked_head", checked_head)
     monkeypatch.setattr(code_link_reads.code, "link_cursor", link_cursor)
-    monkeypatch.setattr(code_link_reads.store, "unchecked_memories", unchecked_memories)
-    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
-    indexed = fetched
-    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
-    complete_during_read = True
-    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
-    unparsed = '["src/a.py"]'
-    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
-    unparsed = '["src/other.py"]'
-    # a link stamped after the last finished catch-up began reading may be one no pass saw,
-    # and with no finished catch-up none is known to be seen
-    stamped = {"m1"}
-    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
-    stamped = set()
-    seen = ""
-    assert await code_link_reads.guidance_code_states("o", [row]) == ["unknown"]
-    seen = '{"read": 5000}'
-    # a link the writer parked behind a running pass is unknown even at the checked head
-    expected = "unknown" if state == "pending" else state
-    assert await code_link_reads.guidance_code_states("o", [row]) == [expected]
+    assert await code_link_reads.guidance_code_states("o", [_excerpt("m1", "allowed")]) == [
+        "unknown"
+    ]
+    assert reads == 1
 
 
 @pytest.mark.asyncio

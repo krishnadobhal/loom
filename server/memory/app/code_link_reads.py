@@ -174,33 +174,16 @@ async def _guidance_indexed_heads(org: str, namespaces: list[str]) -> dict[str, 
         return {}
 
 
-async def _seen_hits(
-    org: str, cns: str, head: str, read: int, hits: list[tuple[int, str, str]]
-) -> dict[int, str]:
-    """The hits whose memories hold no link stamped after the catch-up began reading."""
-    try:
-        unseen = await store.unchecked_memories(
-            org, cns, [mid for _, _, mid in hits], head, max(0, read - link_pass.STAMP_LAG_MS)
-        )
-    except Exception as error:  # noqa: BLE001 — unread stamps leave guidance uncertain
-        log.debug("Guidance link stamps unavailable: %s", type(error).__name__)
-        return {}
-    return {index: state for index, state, mid in hits if mid not in unseen}
-
-
 async def _confirm(
     org: str,
-    positive: dict[tuple[str, str], list[tuple[int, str, str]]],
-    coverage: dict[str, Any],
+    positive: dict[tuple[str, str], list[tuple[int, str]]],
     states: list[str],
 ) -> None:
-    """Serve the positive states of the repositories whose checked head is the indexed
-    one, for the memories no link stamped after the finished catch-up began reading."""
+    """Serve the positive states of the repositories whose checked head is the indexed one."""
     indexed = await _guidance_indexed_heads(org, [cns for cns, _ in positive])
     for (cns, checked_head), hits in positive.items():
-        read = coverage[cns][2]
-        if indexed.get(cns) == checked_head and read is not None:
-            for index, state in (await _seen_hits(org, cns, checked_head, read, hits)).items():
+        if indexed.get(cns) == checked_head:
+            for index, state in hits:
                 states[index] = state
 
 
@@ -243,11 +226,11 @@ async def guidance_code_states(org: str, rows: Sequence[Mapping[str, Any]]) -> l
     except Exception as error:  # noqa: BLE001 — unavailable links leave guidance uncertain
         log.debug("Guidance code links unavailable: %s", type(error).__name__)
         return states
-    by_revision: dict[tuple[str, str, str, str], list[LinkRow]] = defaultdict(list)
+    by_revision: dict[tuple[str, str, str, str], list[store.StampedLink]] = defaultdict(list)
     for link in links:
         key = (link["memory_id"], link["namespace"], link["code_namespace"], link["inputs_hash"])
         by_revision[key].append(link)
-    positive: dict[tuple[str, str], list[tuple[int, str, str]]] = defaultdict(list)
+    positive: dict[tuple[str, str], list[tuple[int, str]]] = defaultdict(list)
     for index, key in candidates.items():
         rows_for_hit = by_revision.get(key, [])
         state = guidance_link_state(rows_for_hit, readable)
@@ -255,13 +238,21 @@ async def guidance_code_states(org: str, rows: Sequence[Mapping[str, Any]]) -> l
             proof = coverage.get(key[2])
             if not isinstance(proof, tuple):
                 continue
-            checked_head, owed, _ = proof
-            if not checked_head or any(link["path"] in owed for link in rows_for_hit):
+            checked_head, owed, read = proof
+            # A link stamped after the last finished catch-up began reading may be one no
+            # pass has seen; the stamp is on the row classified, so no later write can
+            # change what it says about itself.
+            cut = max(0, read - link_pass.STAMP_LAG_MS) if read is not None else 0
+            if not checked_head or any(
+                link["path"] in owed
+                or (link["checked_commit"] != checked_head and link["inserted_ms"] >= cut)
+                for link in rows_for_hit
+            ):
                 continue
-            positive[key[2], checked_head].append((index, state, key[0]))
+            positive[key[2], checked_head].append((index, state))
         else:
             states[index] = state
-    await _confirm(org, positive, coverage, states)
+    await _confirm(org, positive, states)
     return states
 
 
@@ -298,7 +289,9 @@ async def links_of(org: str, memory: dict[str, Any]) -> list[CodeLink]:
         tags = [str(t) for t in memory.get("tags") or []]
         if not code_namespace_for(org, str(memory["namespace"]), tags):
             return []  # no link is made from a memory that names no repository
-        rows = current(org, memory, await store.for_memories(org, [str(memory["mid"])]))
+        rows = current(
+            org, memory, cast("list[LinkRow]", await store.for_memories(org, [str(memory["mid"])]))
+        )
         seen = await readable_namespaces(org, {a["code_namespace"] for a in rows})
     except Exception as e:  # noqa: BLE001 — the links are additive to the read
         log.debug("code links unavailable: %s", e)

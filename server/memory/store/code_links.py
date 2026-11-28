@@ -87,6 +87,10 @@ LINK_COLS: dict[str, Any] = {
 }
 
 
+class StampedLink(LinkRow):
+    inserted_ms: int  # ClickHouse's time (ms) the row was inserted, read only
+
+
 class PendingLink(LinkRow):
     expired: int  # older than the days `pending` was asked for
 
@@ -285,17 +289,18 @@ def tombstones(rows: Sequence[LinkRow]) -> list[LinkRow]:
 
 async def for_memories(
     org: str, memory_ids: Sequence[str], *, ch: _CHClient | None = None
-) -> list[LinkRow]:
-    """Live links of these memories."""
+) -> list[StampedLink]:
+    """Live links of these memories, each with the time it was inserted."""
     if not memory_ids:
         return []
     rows = await query_all_sliced(
         ch or _default_client(),
-        f"SELECT * {_LIVE} AND org = {{org:String}} AND memory_id IN {{ids:Array(UUID)}}",
+        "SELECT *, toUnixTimestamp64Milli(inserted_at) AS inserted_ms "
+        f"{_LIVE} AND org = {{org:String}} AND memory_id IN {{ids:Array(UUID)}}",
         {"org": org, "ids": sorted({str(i) for i in memory_ids})},
         "ids",
     )
-    return _links(rows)
+    return cast(list[StampedLink], _links(rows))
 
 
 async def for_paths(
@@ -495,34 +500,6 @@ async def inserted_since(
         )
     )
     return rows, _key(rows[-1]) if len(rows) == int(limit) else None
-
-
-async def unchecked_memories(
-    org: str,
-    code_namespace: str,
-    memory_ids: Sequence[str],
-    head: str,
-    since: int,
-    *,
-    ch: _CHClient | None = None,
-) -> set[str]:
-    """The memories among `memory_ids` with a live link not checked at `head` that was
-    inserted at or after `since` (ms)."""
-    rows = await query_all_sliced(
-        ch or _default_client(),
-        "SELECT DISTINCT memory_id "
-        + _UNCHECKED.format(_LIVE=_LIVE)
-        + " AND memory_id IN {ids:Array(UUID)}",
-        {
-            "org": org,
-            "cns": code_namespace,
-            "head": head,
-            "since": since,
-            "ids": sorted(set(memory_ids)),
-        },
-        "ids",
-    )
-    return {str(r["memory_id"]) for r in rows}
 
 
 async def stale_fingerprints(
