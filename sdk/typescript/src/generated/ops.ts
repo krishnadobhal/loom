@@ -464,6 +464,7 @@ export interface CodeLesson {
   code_state?: string;
   path?: string;
   changed_since?: string;
+  code_moved?: Array<Record<string, unknown>>;
   supersedes_key?: string;
   suggestion?: string;
   owner_symbol?: string;

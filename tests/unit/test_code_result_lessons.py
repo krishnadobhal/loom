@@ -1111,3 +1111,11 @@ async def test_unlimited_lessons_keep_all_selected_rows(monkeypatch: pytest.Monk
     ]
     found = await _lessons(monkeypatch, {"a.py": rows}, ["a.py"], budget=0)
     assert {row["memory_key"] for row in found} == {str(i) for i in range(8)}
+
+
+def test_a_lesson_keeps_the_links_the_code_moved_to() -> None:
+    from server.code.domain.lesson import code_lessons
+
+    moved = [{"path": "b.py", "symbol": "g", "state": "moved", "was_path": "a.py"}]
+    [kept] = code_lessons.validate_python([{"memory_key": "k", "code_moved": moved}])
+    assert kept["code_moved"] == moved

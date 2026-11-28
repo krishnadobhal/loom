@@ -1,5 +1,7 @@
 """A memory excerpt attached to a code result or symbol definition."""
 
+from typing import Any
+
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
@@ -13,6 +15,7 @@ class CodeLesson(TypedDict, total=False):
     code_state: str
     path: str
     changed_since: str
+    code_moved: list[dict[str, Any]]
     supersedes_key: str
     suggestion: str
     owner_symbol: str

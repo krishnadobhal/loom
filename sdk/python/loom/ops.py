@@ -6030,6 +6030,7 @@ class CodeLesson(TypedDict, total=False):
     code_state: NotRequired[str]
     path: NotRequired[str]
     changed_since: NotRequired[str]
+    code_moved: NotRequired[list[dict[str, Any]]]
     supersedes_key: NotRequired[str]
     suggestion: NotRequired[str]
     owner_symbol: NotRequired[str]
