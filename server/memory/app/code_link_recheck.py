@@ -324,9 +324,8 @@ async def _catch_up(
     commit, a page of the batch size per pass in key order. `read` moves to this pass's
     start only after the last page, and guidance trusts no link stamped after `STAMP_LAG_MS`
     before it, so a link stamped up to that much before a pass read but committed after
-    it is rechecked, and meanwhile not trusted. With
-    no cursor (the first pass, or links an older build had stored) every link not at
-    `head` is rechecked once."""
+    it is rechecked, and meanwhile not trusted. With no cursor (the first pass, or links an
+    older build had stored) every link not at `head` is rechecked once."""
     seen = link_pass.Cursor[dict[str, Any]](f"seen/{org}/{cns}", {})
     cursor = await seen.read()
     after = tuple(cursor["after"]) if cursor.get("after") else None

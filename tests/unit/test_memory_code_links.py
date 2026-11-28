@@ -6427,11 +6427,18 @@ async def test_a_link_stamped_just_before_the_last_read_but_committed_after_it_i
     lag = code_link_pass.STAMP_LAG_MS
     # an insert stamped inside the margin before the read that committed after it
     w.add("slow", "h0", ins=read - lag + 500)
+    w.add("edge", "h0", ins=read - lag)  # exactly at the boundary: `>=` includes it
     w.add("beyond", "h0", ins=read - lag - 500)  # a gap past the margin is the ceiling
-    # guidance trusts a link only if stamped below `read - lag`
-    assert next(a for a in w.table if a["memory_id"] == "slow")["ins"] >= read - lag
+
+    async def unchecked(org, cns, ids, head, since):
+        return {a["memory_id"] for a in w.table if a["memory_id"] in ids and a["ins"] >= since}
+
+    monkeypatch.setattr(code_links.store, "unchecked_memories", unchecked)
+    hits = [(i, "fresh", m) for i, m in enumerate(("slow", "edge", "beyond"))]
+    seen = await code_link_reads._seen_hits("o", "code-a", "h1", read, hits)
+    assert seen == {2: "fresh"}  # only `beyond` is trusted; `slow` and `edge` are unseen
     await w.pass_at()
-    assert w.rechecked[-1] == ["slow"]
+    assert w.rechecked[-1] == ["edge", "slow"]
 
 
 @pytest.mark.asyncio
