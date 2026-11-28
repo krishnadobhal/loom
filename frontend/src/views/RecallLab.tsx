@@ -556,13 +556,14 @@ export function RecallLab() {
             const writer = await resolveSearchWriter(identity, h, ac.signal).catch(() => undefined);
             if (!writer || ac.signal.aborted) continue;
             const named = rowIdentity(identity.namespace, { ...h, ...writer });
-            setRows((cur) =>
-              cur === null
-                ? cur
-                : cur.some((x) => x.id === named)
-                  ? cur.filter((x) => x.id !== id)
-                  : cur.map((x) => (x.id === id ? { ...x, id: named, writer: { ...x.writer, ...writer } } : x)),
-            );
+            setRows((cur) => {
+              const mine = cur?.find((x) => x.id === id);
+              if (!cur || !mine) return cur;
+              // The keyword row that holds the hit gains its score and evidence.
+              if (cur.some((x) => x.id === named))
+                return cur.filter((x) => x.id !== id).map((x) => (x.id === named ? { ...x, hit: mine.hit } : x));
+              return cur.map((x) => (x.id === id ? { ...x, id: named, writer: { ...x.writer, ...writer } } : x));
+            });
           }
         };
         void Promise.all(Array.from({ length: LOOKUPS_IN_FLIGHT }, lookup));

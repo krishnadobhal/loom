@@ -139,6 +139,8 @@ describe("Recall Lab and the Memories list", () => {
     await userEvent.type(screen.getByLabelText("Recall query"), "Azure");
     await screen.findByText("keyword match", {}, { timeout: 3000 });
     await waitFor(() => expect(screen.getAllByText("older_azure")).toHaveLength(1));
+    // The merged row keeps the ranked hit's score.
+    await waitFor(() => expect(screen.getByText("0.900")).toBeTruthy());
   });
 
   it("keeps a legacy hit that another writer's row of the same key holds", async () => {
